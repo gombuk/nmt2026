@@ -127,3 +127,51 @@ export const generateSubjectSimulation = async (subject: Subject, topic?: string
     throw error;
   }
 };
+
+export const generateTopicQuiz = async (subject: Subject, topic: string): Promise<Question[]> => {
+  // 10 questions for a specific topic check
+  try {
+    const questions = await fetchQuestionsInternal(subject, 10, topic);
+    return questions.map((q, index) => ({
+      ...q,
+      id: index + 1
+    }));
+  } catch (error) {
+    console.error(`Error generating topic quiz for ${topic}:`, error);
+    throw error;
+  }
+};
+
+export const generateStudyNotes = async (subject: string, topic: string): Promise<string> => {
+    const prompt = `
+      Створи детальний та структурований конспект для підготовки до НМТ 2026 з предмету "${subject}" на тему: "${topic}".
+      
+      Вимоги до структури та оформлення (використовуй Markdown):
+      1. **Вступ**: короткий опис суті теми.
+      2. **Ключові дати та події** (для історії) або **Формули та визначення** (для інших предметів).
+      3. **Персоналії** (для історії/літератури).
+      4. **Основний виклад матеріалу**: тезисно, головні події, причини та наслідки.
+      5. **Лайфхаки для НМТ**: на що звернути особливу увагу в тестах.
+
+      ВАЖЛИВО: Обов'язково виділяй жирним шрифтом (**приклад**) усі:
+      - Дати (наприклад: **1648 р.**)
+      - Імена історичних діячів або авторів (наприклад: **Богдан Хмельницький**)
+      - Ключові терміни та поняття (наприклад: **Універсал**, **Дисидентство**)
+      - Назви важливих документів чи творів.
+      
+      Це критично важливо для візуального запам'ятовування. Стиль викладу: чіткий, без зайвих слів, орієнтований на складання іспиту.
+      Мова: українська.
+    `;
+  
+    try {
+      const response = await ai.models.generateContent({
+        model: modelId,
+        contents: prompt,
+      });
+  
+      return response.text || "Не вдалося згенерувати конспект. Спробуйте ще раз.";
+    } catch (error) {
+      console.error("Error generating notes:", error);
+      throw error;
+    }
+  };

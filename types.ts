@@ -13,7 +13,8 @@ export enum AppState {
   LOADING = 'LOADING',
   QUIZ = 'QUIZ',
   RESULTS = 'RESULTS',
-  ERROR = 'ERROR'
+  ERROR = 'ERROR',
+  STUDY = 'STUDY'
 }
 
 export interface Question {

@@ -3,9 +3,10 @@ import { Subject, AppState, QuizSession, Question } from './types';
 import { SubjectCard } from './components/SubjectCard';
 import { QuizRunner } from './components/QuizRunner';
 import { ResultsView } from './components/ResultsView';
-import { generateNMTQuestions, generateNMTSimulation, generateSubjectSimulation } from './services/geminiService';
-import { GraduationCap, Loader2, Sparkles, AlertCircle, Timer, Layers, X, Check, BookOpen, BrainCircuit, ListTree, Shuffle } from 'lucide-react';
+import { generateNMTQuestions, generateNMTSimulation, generateSubjectSimulation, generateTopicQuiz } from './services/geminiService';
+import { GraduationCap, Loader2, Sparkles, AlertCircle, Timer, Layers, X, Check, BookOpen, BrainCircuit, ListTree, Shuffle, NotebookPen } from 'lucide-react';
 import { TOPICS } from './data/topics';
+import { StudyView } from './components/StudyView';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.MENU);
@@ -84,6 +85,29 @@ const App: React.FC = () => {
     }
   };
 
+  const startTopicQuiz = async (subject: Subject, topic: string) => {
+    setAppState(AppState.LOADING);
+    setLoadingText(`Створюємо тест (10 питань): ${topic}...`);
+    setErrorMsg(null);
+
+    try {
+      const questions = await generateTopicQuiz(subject, topic);
+      const newSession: QuizSession = {
+        subject: `Тест по темі: ${topic}`,
+        questions,
+        userAnswers: [],
+        startTime: Date.now(),
+        timeLimit: 15 * 60 // 15 minutes for 10 questions
+      };
+      setSession(newSession);
+      setAppState(AppState.QUIZ);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg("Не вдалося створити тест по темі. Спробуйте ще раз.");
+      setAppState(AppState.ERROR);
+    }
+  };
+
   const handleQuizComplete = (answers: number[], endTime: number) => {
     if (session) {
       setSession({ ...session, userAnswers: answers, endTime });
@@ -101,6 +125,11 @@ const App: React.FC = () => {
       if (session?.subject.includes("Симуляція")) {
           // If it was a simulation, restart with same settings
           startSimulation();
+      } else if (session?.subject.includes("Тест по темі")) {
+          // It's a bit hard to restart a specific topic quiz without storing the state, 
+          // but for now we redirect to menu or could store lastTopic in state.
+          // Simplest fallback:
+          resetApp();
       } else if (selectedSubject) {
           startQuiz(selectedSubject);
       } else {
@@ -157,39 +186,60 @@ const App: React.FC = () => {
               </p>
             </div>
 
-            {/* Simulation Card */}
-            <div 
-              onClick={() => setShowSimModal(true)}
-              className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-8 sm:p-10 text-white shadow-xl transform transition-all hover:scale-[1.01] hover:shadow-2xl cursor-pointer group relative overflow-hidden"
-            >
-               <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity transform group-hover:rotate-12">
-                  <Layers className="w-64 h-64" />
-               </div>
-               
-               <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-                  <div>
-                    <div className="flex items-center space-x-3 mb-4">
-                      <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-sm border border-white/10 uppercase tracking-wider">
-                        Режим іспиту
-                      </span>
-                      <span className="flex items-center text-indigo-100 text-sm font-medium">
-                        <Timer className="w-4 h-4 mr-1" />
-                        60 хвилин • 32 питання
-                      </span>
-                    </div>
-                    <h2 className="text-3xl font-bold mb-2">Симуляція НМТ 2026</h2>
-                    <p className="text-indigo-100 max-w-xl text-lg">
-                      Пройди повноцінний тест у режимі реального часу. Обирай між мультитестом (всі предмети) або поглибленим тестом з одного предмета.
-                    </p>
-                  </div>
-                  <button className="px-8 py-4 bg-white text-indigo-700 rounded-xl font-bold shadow-lg hover:bg-indigo-50 transition-colors flex-shrink-0 w-full md:w-auto text-center">
-                    Налаштувати тест
-                  </button>
-               </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Simulation Card */}
+                <div 
+                  onClick={() => setShowSimModal(true)}
+                  className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-8 text-white shadow-xl transform transition-all hover:scale-[1.01] hover:shadow-2xl cursor-pointer group relative overflow-hidden"
+                >
+                   <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity transform group-hover:rotate-12">
+                      <Layers className="w-48 h-48" />
+                   </div>
+                   
+                   <div className="relative z-10">
+                        <div className="flex items-center space-x-3 mb-4">
+                          <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-sm border border-white/10 uppercase tracking-wider">
+                            Практика
+                          </span>
+                        </div>
+                        <h2 className="text-3xl font-bold mb-2">Симуляція НМТ</h2>
+                        <p className="text-indigo-100 text-lg mb-6">
+                          Мультитест або 32 питання з профільного предмету. Таймер 60 хв.
+                        </p>
+                         <button className="px-6 py-3 bg-white text-indigo-700 rounded-xl font-bold shadow-lg hover:bg-indigo-50 transition-colors w-full sm:w-auto">
+                           Налаштувати
+                         </button>
+                   </div>
+                </div>
+
+                {/* Study Notes Card */}
+                <div 
+                  onClick={() => setAppState(AppState.STUDY)}
+                  className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-3xl p-8 text-white shadow-xl transform transition-all hover:scale-[1.01] hover:shadow-2xl cursor-pointer group relative overflow-hidden"
+                >
+                   <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity transform group-hover:rotate-12">
+                      <NotebookPen className="w-48 h-48" />
+                   </div>
+                   
+                   <div className="relative z-10">
+                        <div className="flex items-center space-x-3 mb-4">
+                          <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-sm border border-white/10 uppercase tracking-wider">
+                            Теорія
+                          </span>
+                        </div>
+                        <h2 className="text-3xl font-bold mb-2">Конспекти</h2>
+                        <p className="text-emerald-100 text-lg mb-6">
+                           Структуровані матеріали по всіх темах історії України, літератури та математики.
+                        </p>
+                         <button className="px-6 py-3 bg-white text-emerald-700 rounded-xl font-bold shadow-lg hover:bg-emerald-50 transition-colors w-full sm:w-auto">
+                           Відкрити бібліотеку
+                         </button>
+                   </div>
+                </div>
             </div>
 
             <div className="flex items-center justify-between mt-12 mb-4">
-                <h3 className="text-xl font-bold text-slate-800">Швидке тренування (5 питань)</h3>
+                <h3 className="text-xl font-bold text-slate-800">Швидкі тести (5 питань)</h3>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -204,6 +254,13 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {appState === AppState.STUDY && (
+            <StudyView 
+              onBack={resetApp} 
+              onStartQuiz={startTopicQuiz}
+            />
+        )}
+
         {appState === AppState.LOADING && (
           <div className="flex flex-col items-center justify-center min-h-[50vh] animate-in fade-in duration-500">
             <div className="relative">
@@ -211,7 +268,7 @@ const App: React.FC = () => {
                 <Loader2 className="w-16 h-16 text-blue-600 animate-spin relative z-10" />
             </div>
             <h2 className="mt-8 text-2xl font-bold text-slate-800">{loadingText}</h2>
-            <p className="text-slate-500 mt-2 text-center max-w-md">ШІ аналізує програму та підбирає актуальні питання.</p>
+            <p className="text-slate-500 mt-2 text-center max-w-md">ШІ аналізує програму та підбирає актуальні матеріали.</p>
           </div>
         )}
 
