@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createNMTChat } from '../services/geminiService';
 import { Chat } from "@google/genai";
-import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff } from 'lucide-react';
+import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X } from 'lucide-react';
 
 interface ChatViewProps {
   onBack: () => void;
@@ -10,6 +10,11 @@ interface ChatViewProps {
 interface Message {
   role: 'user' | 'model';
   text: string;
+}
+
+interface VoiceSettings {
+  voiceURI: string;
+  rate: number;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
@@ -22,17 +27,78 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isSoundOn, setIsSoundOn] = useState(true);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  
+  // Settings State
+  const [showSettings, setShowSettings] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
+    voiceURI: '',
+    rate: 1.0
+  });
   
   // Use a ref to persist the chat session across renders
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const synthRef = useRef<SpeechSynthesis | null>(null);
 
   useEffect(() => {
     // Initialize chat session on mount
     chatSessionRef.current = createNMTChat();
     
-    // Check for browser support
+    // Load saved settings
+    const savedSettings = localStorage.getItem('nmt_voice_settings');
+    if (savedSettings) {
+        try {
+            const parsed = JSON.parse(savedSettings);
+            setVoiceSettings(parsed);
+        } catch (e) {
+            console.error("Failed to load voice settings", e);
+        }
+    }
+
+    // Initialize Speech Synthesis
+    if ('speechSynthesis' in window) {
+        synthRef.current = window.speechSynthesis;
+        
+        const loadVoices = () => {
+             const voices = window.speechSynthesis.getVoices();
+             // Filter for Ukrainian voices
+             // We also look for generic voices if strictly UK is missing, but primarily UK
+             const ukVoices = voices.filter(v => v.lang.toLowerCase().includes('uk') || v.lang.toLowerCase().includes('ua'));
+             
+             // Sort to prioritize Google/Premium voices which sound more human
+             ukVoices.sort((a, b) => {
+                 const isAGoogle = a.name.includes('Google') || a.name.includes('Premium') || a.name.includes('Neural');
+                 const isBGoogle = b.name.includes('Google') || b.name.includes('Premium') || b.name.includes('Neural');
+                 if (isAGoogle && !isBGoogle) return -1;
+                 if (!isAGoogle && isBGoogle) return 1;
+                 return 0;
+             });
+
+             setAvailableVoices(ukVoices);
+
+             // Set default voice if none selected or selected is invalid
+             setVoiceSettings(prev => {
+                 const isValid = ukVoices.find(v => v.voiceURI === prev.voiceURI);
+                 if (!prev.voiceURI || !isValid) {
+                     return { ...prev, voiceURI: ukVoices[0]?.voiceURI || '' };
+                 }
+                 return prev;
+             });
+        };
+
+        loadVoices();
+        
+        // Chrome loads voices asynchronously
+        if (window.speechSynthesis.onvoiceschanged !== undefined) {
+             window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+    }
+
+    // Check for Speech Recognition support
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         recognitionRef.current = new SpeechRecognition();
@@ -63,13 +129,60 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         if (recognitionRef.current) {
             recognitionRef.current.stop();
         }
+        if (synthRef.current) {
+            synthRef.current.cancel();
+        }
     }
   }, []);
 
+  // Save settings when changed
   useEffect(() => {
-    // Scroll to bottom whenever messages change
+      localStorage.setItem('nmt_voice_settings', JSON.stringify(voiceSettings));
+  }, [voiceSettings]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
+
+  const speakText = (text: string) => {
+      if (!synthRef.current) return;
+
+      synthRef.current.cancel();
+
+      const cleanText = text
+        .replace(/[*#_`]/g, '')
+        .replace(/\$/g, '') 
+        .replace(/\[.*?\]/g, '')
+        .replace(/\n/g, '. ');
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.rate = voiceSettings.rate;
+      utterance.pitch = 1.0;
+
+      // Find the selected voice object
+      const voices = synthRef.current.getVoices();
+      const selectedVoice = voices.find(v => v.voiceURI === voiceSettings.voiceURI);
+      
+      if (selectedVoice) {
+          utterance.voice = selectedVoice;
+      } else {
+          // Fallback if specific voice not found (e.g. browser update)
+          utterance.lang = 'uk-UA';
+      }
+
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      synthRef.current.speak(utterance);
+  };
+
+  const stopSpeaking = () => {
+      if (synthRef.current) {
+          synthRef.current.cancel();
+          setIsSpeaking(false);
+      }
+  };
 
   const handleSend = async () => {
     if (!inputValue.trim() || loading) return;
@@ -77,8 +190,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     const userText = inputValue;
     setInputValue('');
     setLoading(true);
+    stopSpeaking();
 
-    // Add user message to UI immediately
     setMessages(prev => [...prev, { role: 'user', text: userText }]);
 
     try {
@@ -86,18 +199,21 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
          chatSessionRef.current = createNMTChat();
       }
 
-      // Send to Gemini
       const response = await chatSessionRef.current.sendMessage({ message: userText });
       
-      // Add model response to UI
       if (response.text) {
           setMessages(prev => [...prev, { role: 'model', text: response.text }]);
+          if (isSoundOn) {
+              speakText(response.text);
+          }
       } else {
           throw new Error("Empty response");
       }
     } catch (error) {
       console.error("Chat error:", error);
-      setMessages(prev => [...prev, { role: 'model', text: "Вибач, сталася помилка при отриманні відповіді. Спробуй, будь ласка, ще раз." }]);
+      const errorText = "Вибач, сталася помилка при отриманні відповіді. Спробуй, будь ласка, ще раз.";
+      setMessages(prev => [...prev, { role: 'model', text: errorText }]);
+      if (isSoundOn) speakText(errorText);
     } finally {
       setLoading(false);
     }
@@ -110,9 +226,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     }
   };
 
-  // Helper to clear chat
   const handleClear = () => {
      chatSessionRef.current = createNMTChat();
+     stopSpeaking();
      setMessages([{ 
       role: 'model', 
       text: 'Чат очищено. Я готовий до нових запитань про НМТ!' 
@@ -128,41 +244,31 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     if (isListening) {
         recognitionRef.current.stop();
     } else {
+        stopSpeaking();
         recognitionRef.current.start();
         setIsListening(true);
     }
   };
 
-  // Simple Markdown renderer with support for bold (**text**) and basic LaTeX cleanup ($text$)
   const renderMessageContent = (text: string) => {
     return text.split('\n').map((line, index, array) => {
-      // Empty lines
-      if (line.trim() === '') {
-          // Only render a break if it's not the last line
-          return index < array.length - 1 ? <br key={index} /> : null;
-      }
-      
-      // Headers
+      if (line.trim() === '') return index < array.length - 1 ? <br key={index} /> : null;
       if (line.startsWith('### ')) return <h4 key={index} className="font-bold text-base mt-2 mb-1">{line.replace('### ', '')}</h4>;
       if (line.startsWith('## ')) return <h3 key={index} className="font-bold text-lg mt-3 mb-2">{line.replace('## ', '')}</h3>;
       
-      // Helper for inline styles
       const parseInline = (content: string) => {
-        // Split by bold (**...**) AND LaTeX math ($...$)
         const parts = content.split(/(\*\*.*?\*\*|\$.*?\$)/g);
         return parts.map((part, i) => {
              if (part.startsWith('**') && part.endsWith('**')) {
                  return <strong key={i}>{part.slice(2, -2)}</strong>;
              }
              if (part.startsWith('$') && part.endsWith('$')) {
-                 // Render math-like text cleanly without dollar signs
                  return <span key={i} className="font-mono text-purple-700 bg-purple-50 px-1 rounded mx-0.5">{part.slice(1, -1)}</span>;
              }
              return part;
         });
       };
 
-      // Bullet points
       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
         const content = line.replace(/^[-*]\s+/, '');
         return (
@@ -173,7 +279,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         );
       }
 
-      // Regular paragraphs
       return (
         <p key={index} className="mb-1 leading-relaxed">
            {parseInline(line)}
@@ -182,13 +287,23 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     });
   };
 
+  // Test current voice settings
+  const testVoice = () => {
+      stopSpeaking();
+      const utterance = new SpeechSynthesisUtterance("Це перевірка голосу. Успіхів у підготовці до НМТ!");
+      const voice = synthRef.current?.getVoices().find(v => v.voiceURI === voiceSettings.voiceURI);
+      if (voice) utterance.voice = voice;
+      utterance.rate = voiceSettings.rate;
+      synthRef.current?.speak(utterance);
+  }
+
   return (
-    <div className="max-w-4xl mx-auto w-full h-[calc(100vh-8rem)] flex flex-col bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-300">
+    <div className="max-w-4xl mx-auto w-full h-[calc(100vh-8rem)] flex flex-col bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-300 relative">
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 p-4 flex items-center justify-between shrink-0 z-10">
+      <div className="bg-white border-b border-slate-100 p-4 flex items-center justify-between shrink-0 z-10 relative">
         <div className="flex items-center">
             <button 
-                onClick={onBack}
+                onClick={() => { stopSpeaking(); onBack(); }}
                 className="mr-3 p-2 rounded-full hover:bg-slate-100 text-slate-500 hover:text-slate-800 transition-colors"
             >
                 <ArrowLeft className="w-5 h-5" />
@@ -201,13 +316,98 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                 <p className="text-xs text-slate-500">Запитуй про будь-яку тему НМТ</p>
             </div>
         </div>
-        <button 
-            onClick={handleClear}
-            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-            title="Очистити чат"
-        >
-            <Eraser className="w-5 h-5" />
-        </button>
+        
+        <div className="flex items-center space-x-1">
+            <button
+                onClick={() => setShowSettings(!showSettings)}
+                className={`p-2 rounded-lg transition-colors ${showSettings ? 'bg-slate-100 text-blue-600' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-50'}`}
+                title="Налаштування голосу"
+            >
+                <Settings className="w-5 h-5" />
+            </button>
+            
+            <button
+                onClick={() => {
+                    if (isSpeaking) {
+                        stopSpeaking();
+                    } else {
+                        setIsSoundOn(!isSoundOn);
+                    }
+                }}
+                className={`p-2 rounded-lg transition-colors ${isSpeaking ? 'text-red-500 hover:bg-red-50' : (isSoundOn ? 'text-blue-600 hover:bg-blue-50' : 'text-slate-400 hover:bg-slate-50')}`}
+                title={isSpeaking ? "Зупинити озвучення" : (isSoundOn ? "Вимкнути звук" : "Увімкнути звук")}
+            >
+                {isSpeaking ? <StopCircle className="w-5 h-5 animate-pulse" /> : (isSoundOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />)}
+            </button>
+            <button 
+                onClick={handleClear}
+                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                title="Очистити чат"
+            >
+                <Eraser className="w-5 h-5" />
+            </button>
+        </div>
+
+        {/* Settings Popover */}
+        {showSettings && (
+            <div className="absolute top-16 right-4 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 p-4 animate-in fade-in zoom-in-95 duration-200">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-slate-800 text-sm">Налаштування озвучки</h3>
+                    <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-semibold text-slate-500 mb-1">Голос</label>
+                        <select 
+                            value={voiceSettings.voiceURI}
+                            onChange={(e) => setVoiceSettings(prev => ({ ...prev, voiceURI: e.target.value }))}
+                            className="w-full text-sm p-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                        >
+                            {availableVoices.length === 0 && <option value="">Голоси не знайдені</option>}
+                            {availableVoices.map((voice) => (
+                                <option key={voice.voiceURI} value={voice.voiceURI}>
+                                    {voice.name}
+                                </option>
+                            ))}
+                        </select>
+                        {availableVoices.length === 0 && (
+                            <p className="text-[10px] text-red-500 mt-1">Перевірте, чи встановлені українські мовні пакети в системі.</p>
+                        )}
+                    </div>
+
+                    <div>
+                        <div className="flex justify-between mb-1">
+                            <label className="text-xs font-semibold text-slate-500">Швидкість</label>
+                            <span className="text-xs font-mono text-slate-700">{voiceSettings.rate}x</span>
+                        </div>
+                        <input 
+                            type="range" 
+                            min="0.5" 
+                            max="2" 
+                            step="0.1" 
+                            value={voiceSettings.rate}
+                            onChange={(e) => setVoiceSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
+                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                        />
+                         <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                            <span>Повільно</span>
+                            <span>Швидко</span>
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={testVoice}
+                        disabled={availableVoices.length === 0}
+                        className="w-full py-2 bg-blue-50 text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-100 transition-colors disabled:opacity-50"
+                    >
+                        Тест голосу
+                    </button>
+                </div>
+            </div>
+        )}
       </div>
 
       {/* Messages Area */}
@@ -226,13 +426,26 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
              </div>
 
              {/* Bubble */}
-             <div className={`
-                max-w-[85%] sm:max-w-[75%] px-5 py-3.5 rounded-2xl shadow-sm text-sm sm:text-base
-                ${msg.role === 'user' 
-                    ? 'bg-blue-600 text-white rounded-tr-none' 
-                    : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none'}
-             `}>
-                {renderMessageContent(msg.text)}
+             <div className="flex flex-col items-start max-w-[85%] sm:max-w-[75%]">
+                 <div className={`
+                    px-5 py-3.5 rounded-2xl shadow-sm text-sm sm:text-base w-full
+                    ${msg.role === 'user' 
+                        ? 'bg-blue-600 text-white rounded-tr-none' 
+                        : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none'}
+                 `}>
+                    {renderMessageContent(msg.text)}
+                 </div>
+                 
+                 {/* Replay Button for AI messages */}
+                 {msg.role === 'model' && (
+                     <button 
+                        onClick={() => speakText(msg.text)}
+                        className="mt-1 ml-2 text-slate-400 hover:text-purple-600 p-1 rounded-full hover:bg-purple-50 transition-colors"
+                        title="Прослухати"
+                     >
+                         <Volume2 className="w-4 h-4" />
+                     </button>
+                 )}
              </div>
           </div>
         ))}
