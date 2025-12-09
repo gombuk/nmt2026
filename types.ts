@@ -14,7 +14,8 @@ export enum AppState {
   QUIZ = 'QUIZ',
   RESULTS = 'RESULTS',
   ERROR = 'ERROR',
-  STUDY = 'STUDY'
+  STUDY = 'STUDY',
+  CHAT = 'CHAT'
 }
 
 export interface Question {

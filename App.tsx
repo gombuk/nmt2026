@@ -4,9 +4,10 @@ import { SubjectCard } from './components/SubjectCard';
 import { QuizRunner } from './components/QuizRunner';
 import { ResultsView } from './components/ResultsView';
 import { generateNMTQuestions, generateNMTSimulation, generateSubjectSimulation, generateTopicQuiz } from './services/geminiService';
-import { GraduationCap, Loader2, Sparkles, AlertCircle, Timer, Layers, X, Check, BookOpen, BrainCircuit, ListTree, Shuffle, NotebookPen } from 'lucide-react';
+import { GraduationCap, Loader2, Sparkles, AlertCircle, Timer, Layers, X, Check, BookOpen, BrainCircuit, ListTree, Shuffle, NotebookPen, MessageCircleQuestion } from 'lucide-react';
 import { TOPICS } from './data/topics';
 import { StudyView } from './components/StudyView';
+import { ChatView } from './components/ChatView';
 
 const App: React.FC = () => {
   const [appState, setAppState] = useState<AppState>(AppState.MENU);
@@ -186,7 +187,7 @@ const App: React.FC = () => {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {/* Simulation Card */}
                 <div 
                   onClick={() => setShowSimModal(true)}
@@ -203,12 +204,12 @@ const App: React.FC = () => {
                           </span>
                         </div>
                         <h2 className="text-3xl font-bold mb-2">Симуляція НМТ</h2>
-                        <p className="text-indigo-100 text-lg mb-6">
+                        <p className="text-indigo-100 text-sm mb-6">
                           Мультитест або 32 питання з профільного предмету. Таймер 60 хв.
                         </p>
-                         <button className="px-6 py-3 bg-white text-indigo-700 rounded-xl font-bold shadow-lg hover:bg-indigo-50 transition-colors w-full sm:w-auto">
-                           Налаштувати
-                         </button>
+                        <div className="flex items-center font-bold text-sm bg-white/10 w-fit px-4 py-2 rounded-lg">
+                           Налаштувати <Layers className="w-4 h-4 ml-2"/>
+                        </div>
                    </div>
                 </div>
 
@@ -228,12 +229,37 @@ const App: React.FC = () => {
                           </span>
                         </div>
                         <h2 className="text-3xl font-bold mb-2">Конспекти</h2>
-                        <p className="text-emerald-100 text-lg mb-6">
+                        <p className="text-emerald-100 text-sm mb-6">
                            Структуровані матеріали по всіх темах історії України, літератури та математики.
                         </p>
-                         <button className="px-6 py-3 bg-white text-emerald-700 rounded-xl font-bold shadow-lg hover:bg-emerald-50 transition-colors w-full sm:w-auto">
-                           Відкрити бібліотеку
-                         </button>
+                        <div className="flex items-center font-bold text-sm bg-white/10 w-fit px-4 py-2 rounded-lg">
+                           Читати <BookOpen className="w-4 h-4 ml-2"/>
+                        </div>
+                   </div>
+                </div>
+
+                {/* Chat Card */}
+                <div 
+                  onClick={() => setAppState(AppState.CHAT)}
+                  className="bg-gradient-to-br from-purple-500 to-pink-600 rounded-3xl p-8 text-white shadow-xl transform transition-all hover:scale-[1.01] hover:shadow-2xl cursor-pointer group relative overflow-hidden"
+                >
+                   <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity transform group-hover:rotate-12">
+                      <MessageCircleQuestion className="w-48 h-48" />
+                   </div>
+                   
+                   <div className="relative z-10">
+                        <div className="flex items-center space-x-3 mb-4">
+                          <span className="bg-white/20 px-3 py-1 rounded-full text-xs font-semibold backdrop-blur-sm border border-white/10 uppercase tracking-wider">
+                            AI Репетитор
+                          </span>
+                        </div>
+                        <h2 className="text-3xl font-bold mb-2">Поставити запитання</h2>
+                        <p className="text-pink-100 text-sm mb-6">
+                           Не розумієш тему? Запитай у штучного інтелекту і отримай детальне пояснення.
+                        </p>
+                         <div className="flex items-center font-bold text-sm bg-white/10 w-fit px-4 py-2 rounded-lg">
+                           Спитати <Sparkles className="w-4 h-4 ml-2"/>
+                        </div>
                    </div>
                 </div>
             </div>
@@ -258,6 +284,12 @@ const App: React.FC = () => {
             <StudyView 
               onBack={resetApp} 
               onStartQuiz={startTopicQuiz}
+            />
+        )}
+        
+        {appState === AppState.CHAT && (
+            <ChatView 
+              onBack={resetApp} 
             />
         )}
 
