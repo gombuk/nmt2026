@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Subject } from '../types';
 import { TOPICS } from '../data/topics';
 import { generateStudyNotes, generateSpeech } from '../services/geminiService';
-import { ChevronRight, ArrowLeft, Book, Loader2, ScrollText, GraduationCap, CheckCircle, Volume2, StopCircle, Settings, X, HelpCircle, Monitor, Smartphone } from 'lucide-react';
+import { ChevronRight, ArrowLeft, Book, Loader2, ScrollText, GraduationCap, CheckCircle, Volume2, StopCircle, Settings, X, HelpCircle, Monitor, Smartphone, Pause, Play, Square } from 'lucide-react';
 
 interface StudyViewProps {
   onBack: () => void;
@@ -31,6 +31,7 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
 
   // Audio State
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showVoiceHelp, setShowVoiceHelp] = useState(false);
@@ -119,9 +120,10 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
           const source = audioContextRef.current.createBufferSource();
           source.buffer = audioBuffer;
           source.connect(audioContextRef.current.destination);
-          source.onended = () => { setIsSpeaking(false); currentSourceRef.current = null; };
+          source.onended = () => { setIsSpeaking(false); setIsPaused(false); currentSourceRef.current = null; };
           currentSourceRef.current = source;
           setIsSpeaking(true);
+          setIsPaused(false);
           source.start();
       } catch (e) {
           console.error("Error playing PCM", e);
@@ -172,9 +174,9 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
       utterance.lang = 'uk-UA';
       const selectedVoice = synthRef.current.getVoices().find(v => v.voiceURI === voiceSettings.voiceURI);
       if (selectedVoice) utterance.voice = selectedVoice;
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      utterance.onstart = () => { setIsSpeaking(true); setIsPaused(false); };
+      utterance.onend = () => { setIsSpeaking(false); setIsPaused(false); };
+      utterance.onerror = () => { setIsSpeaking(false); setIsPaused(false); };
       synthRef.current.speak(utterance);
   };
 
@@ -185,7 +187,30 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
           currentSourceRef.current = null;
       }
       setIsSpeaking(false);
+      setIsPaused(false);
       setAudioLoading(false);
+  };
+
+  const togglePause = () => {
+      if (voiceSettings.type === 'cloud') {
+          if (!audioContextRef.current) return;
+          if (audioContextRef.current.state === 'running') {
+              audioContextRef.current.suspend();
+              setIsPaused(true);
+          } else if (audioContextRef.current.state === 'suspended') {
+              audioContextRef.current.resume();
+              setIsPaused(false);
+          }
+      } else {
+          if (!synthRef.current) return;
+          if (synthRef.current.paused) {
+              synthRef.current.resume();
+              setIsPaused(false);
+          } else if (synthRef.current.speaking) {
+              synthRef.current.pause();
+              setIsPaused(true);
+          }
+      }
   };
 
   const handleTopicSelect = async (subject: Subject, topic: string) => {
@@ -295,20 +320,40 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
                    </div>
                    
                    <div className="flex items-center space-x-2 mt-4 md:mt-0 bg-slate-50 p-2 rounded-xl border border-slate-100 relative">
+                        {isSpeaking && (
+                            <button
+                                onClick={stopSpeaking}
+                                className="p-2 rounded-lg transition-colors text-red-500 hover:bg-red-50"
+                                title="Стоп"
+                            >
+                                <Square className="w-5 h-5 fill-current" />
+                            </button>
+                        )}
+
                         <button
                             onClick={() => {
-                                if (isSpeaking) stopSpeaking();
+                                if (isSpeaking) togglePause();
                                 else speakText();
                             }}
                             disabled={!notes}
                             className={`flex items-center px-3 py-2 rounded-lg transition-colors font-medium text-sm ${
                                 isSpeaking 
-                                    ? 'bg-red-100 text-red-600 hover:bg-red-200' 
+                                    ? 'bg-blue-600 text-white hover:bg-blue-700' 
                                     : 'bg-blue-600 text-white hover:bg-blue-700'
                             }`}
                         >
-                            {audioLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : (isSpeaking ? <StopCircle className="w-4 h-4 mr-2" /> : <Volume2 className="w-4 h-4 mr-2" />)}
-                            {isSpeaking ? 'Стоп' : 'Слухати'}
+                            {audioLoading ? (
+                                <Loader2 className="w-4 h-4 animate-spin mr-2"/>
+                            ) : isSpeaking ? (
+                                isPaused ? <Play className="w-4 h-4 mr-2" /> : <Pause className="w-4 h-4 mr-2" />
+                            ) : (
+                                <Volume2 className="w-4 h-4 mr-2" />
+                            )}
+                            
+                            {isSpeaking 
+                                ? (isPaused ? 'Продовжити' : 'Пауза')
+                                : 'Слухати'
+                            }
                         </button>
 
                         <button

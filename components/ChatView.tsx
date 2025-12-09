@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createNMTChat, generateSpeech } from '../services/geminiService';
 import { Chat } from "@google/genai";
-import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X, HelpCircle, Smartphone, Monitor, Apple, Cloud } from 'lucide-react';
+import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X, HelpCircle, Smartphone, Monitor, Apple, Cloud, Pause, Play, Square } from 'lucide-react';
 
 interface ChatViewProps {
   onBack: () => void;
@@ -38,6 +38,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const [isListening, setIsListening] = useState(false);
   const [isSoundOn, setIsSoundOn] = useState(true);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   
   // Settings State
@@ -205,11 +206,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
           
           source.onended = () => {
               setIsSpeaking(false);
+              setIsPaused(false);
               currentSourceRef.current = null;
           };
 
           currentSourceRef.current = source;
           setIsSpeaking(true);
+          setIsPaused(false);
           source.start();
 
       } catch (e) {
@@ -262,9 +265,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       const selectedVoice = voices.find(v => v.voiceURI === voiceSettings.voiceURI);
       if (selectedVoice) utterance.voice = selectedVoice;
 
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      utterance.onstart = () => { setIsSpeaking(true); setIsPaused(false); };
+      utterance.onend = () => { setIsSpeaking(false); setIsPaused(false); };
+      utterance.onerror = () => { setIsSpeaking(false); setIsPaused(false); };
 
       synthRef.current.speak(utterance);
   };
@@ -280,7 +283,30 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
           currentSourceRef.current = null;
       }
       setIsSpeaking(false);
+      setIsPaused(false);
       setAudioLoading(false);
+  };
+
+  const togglePause = () => {
+      if (voiceSettings.type === 'cloud') {
+          if (!audioContextRef.current) return;
+          if (audioContextRef.current.state === 'running') {
+              audioContextRef.current.suspend();
+              setIsPaused(true);
+          } else if (audioContextRef.current.state === 'suspended') {
+              audioContextRef.current.resume();
+              setIsPaused(false);
+          }
+      } else {
+          if (!synthRef.current) return;
+          if (synthRef.current.paused) {
+              synthRef.current.resume();
+              setIsPaused(false);
+          } else if (synthRef.current.speaking) {
+              synthRef.current.pause();
+              setIsPaused(true);
+          }
+      }
   };
 
   const handleSend = async () => {
@@ -411,18 +437,38 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                 <Settings className="w-5 h-5" />
             </button>
             
+            {isSpeaking && (
+                <button
+                    onClick={stopSpeaking}
+                    className="p-2 rounded-lg transition-colors text-red-500 hover:bg-red-50"
+                    title="Стоп"
+                >
+                    <Square className="w-5 h-5 fill-current" />
+                </button>
+            )}
+
             <button
                 onClick={() => {
                     if (isSpeaking) {
-                        stopSpeaking();
+                        togglePause();
                     } else {
                         setIsSoundOn(!isSoundOn);
                     }
                 }}
-                className={`p-2 rounded-lg transition-colors ${isSpeaking ? 'text-red-500 hover:bg-red-50' : (isSoundOn ? 'text-blue-600 hover:bg-blue-50' : 'text-slate-400 hover:bg-slate-50')}`}
-                title={isSpeaking ? "Зупинити озвучення" : (isSoundOn ? "Вимкнути звук" : "Увімкнути звук")}
+                className={`p-2 rounded-lg transition-colors ${
+                    isSpeaking 
+                        ? 'text-blue-600 hover:bg-blue-50' 
+                        : (isSoundOn ? 'text-blue-600 hover:bg-blue-50' : 'text-slate-400 hover:bg-slate-50')
+                }`}
+                title={isSpeaking ? (isPaused ? "Продовжити" : "Пауза") : (isSoundOn ? "Вимкнути звук" : "Увімкнути звук")}
             >
-                {audioLoading ? <Loader2 className="w-5 h-5 animate-spin"/> : (isSpeaking ? <StopCircle className="w-5 h-5 animate-pulse" /> : (isSoundOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />))}
+                {audioLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin"/>
+                ) : isSpeaking ? (
+                    isPaused ? <Play className="w-5 h-5" /> : <Pause className="w-5 h-5" />
+                ) : (
+                    isSoundOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />
+                )}
             </button>
             <button onClick={handleClear} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Eraser className="w-5 h-5" /></button>
         </div>
