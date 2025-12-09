@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { createNMTChat } from '../services/geminiService';
+import { createNMTChat, generateSpeech } from '../services/geminiService';
 import { Chat } from "@google/genai";
-import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X, AlertTriangle } from 'lucide-react';
+import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X, HelpCircle, Smartphone, Monitor, Apple, Cloud } from 'lucide-react';
 
 interface ChatViewProps {
   onBack: () => void;
@@ -14,8 +14,17 @@ interface Message {
 
 interface VoiceSettings {
   voiceURI: string;
+  type: 'system' | 'cloud';
   rate: number;
 }
+
+const CLOUD_VOICES = [
+  { name: 'Kore (Жіночий, спокійний)', id: 'Kore' },
+  { name: 'Puck (Чоловічий, енергійний)', id: 'Puck' },
+  { name: 'Charon (Чоловічий, глибокий)', id: 'Charon' },
+  { name: 'Fenrir (Чоловічий, швидкий)', id: 'Fenrir' },
+  { name: 'Zephyr (Жіночий, м\'який)', id: 'Zephyr' },
+];
 
 export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const [messages, setMessages] = useState<Message[]>([
@@ -29,20 +38,25 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const [isListening, setIsListening] = useState(false);
   const [isSoundOn, setIsSoundOn] = useState(true);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [audioLoading, setAudioLoading] = useState(false);
   
   // Settings State
   const [showSettings, setShowSettings] = useState(false);
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [showVoiceHelp, setShowVoiceHelp] = useState(false);
+  const [availableSystemVoices, setAvailableSystemVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceSettings, setVoiceSettings] = useState<VoiceSettings>({
-    voiceURI: '',
+    voiceURI: 'Kore', // Default to Cloud voice
+    type: 'cloud',
     rate: 1.0
   });
   
-  // Use a ref to persist the chat session across renders
+  // Refs
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   useEffect(() => {
     // Initialize chat session on mount
@@ -59,67 +73,53 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         }
     }
 
-    // Initialize Speech Synthesis
+    // Initialize Audio Context for Cloud TTS
+    const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+    if (AudioContextClass) {
+        audioContextRef.current = new AudioContextClass({ sampleRate: 24000 });
+    }
+
+    // Initialize System Speech Synthesis
     if ('speechSynthesis' in window) {
         synthRef.current = window.speechSynthesis;
         
         const loadVoices = () => {
              const voices = window.speechSynthesis.getVoices();
              
-             if (voices.length === 0) return; // Wait for voices to load
+             if (voices.length === 0) return; 
 
-             // Filter for Ukrainian voices
              const ukVoices = voices.filter(v => 
                 v.lang.toLowerCase().includes('uk') || 
                 v.lang.toLowerCase().includes('ua')
              );
              
-             // Sort to prioritize Google/Premium voices which sound more human
              ukVoices.sort((a, b) => {
-                 const isAGoogle = a.name.includes('Google') || a.name.includes('Premium') || a.name.includes('Neural');
-                 const isBGoogle = b.name.includes('Google') || b.name.includes('Premium') || b.name.includes('Neural');
+                 const isAGoogle = a.name.includes('Google') || a.name.includes('Premium');
+                 const isBGoogle = b.name.includes('Google') || b.name.includes('Premium');
                  if (isAGoogle && !isBGoogle) return -1;
                  if (!isAGoogle && isBGoogle) return 1;
                  return 0;
              });
 
-             setAvailableVoices(ukVoices);
-
-             // Set default voice if none selected or selected is invalid
-             setVoiceSettings(prev => {
-                 // Check if the currently selected voice still exists
-                 const isValid = ukVoices.find(v => v.voiceURI === prev.voiceURI);
-                 
-                 // If not valid or empty, pick the first one, or leave empty (system default)
-                 if (!prev.voiceURI || !isValid) {
-                     return { ...prev, voiceURI: ukVoices[0]?.voiceURI || '' };
-                 }
-                 return prev;
-             });
+             setAvailableSystemVoices(ukVoices);
         };
 
-        // Try loading immediately
         loadVoices();
-        
-        // Setup listener for async loading (Chrome/Android)
         window.speechSynthesis.onvoiceschanged = loadVoices;
 
-        // Force a periodic check for the first few seconds (failsafe for some browsers)
+        // Failsafe polling for system voices
         const intervalId = setInterval(() => {
             const voices = window.speechSynthesis.getVoices();
             if (voices.length > 0) {
                 loadVoices();
-                // If we found voices, we can stop polling, BUT we keep polling if we specifically haven't found UK voices yet
-                // to be safe, we just clear it after we get *any* voices to save resources
                 clearInterval(intervalId);
             }
         }, 500);
 
-        // Cleanup after 5 seconds to stop polling anyway
         setTimeout(() => clearInterval(intervalId), 5000);
     }
 
-    // Check for Speech Recognition support
+    // Initialize Speech Recognition
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         recognitionRef.current = new SpeechRecognition();
@@ -129,10 +129,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
 
         recognitionRef.current.onresult = (event: any) => {
             const transcript = event.results[0][0].transcript;
-            setInputValue((prev) => {
-                const newValue = prev ? `${prev} ${transcript}` : transcript;
-                return newValue;
-            });
+            setInputValue((prev) => (prev ? `${prev} ${transcript}` : transcript));
             setIsListening(false);
         };
 
@@ -141,21 +138,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
             setIsListening(false);
         };
 
-        recognitionRef.current.onend = () => {
-            setIsListening(false);
-        };
+        recognitionRef.current.onend = () => setIsListening(false);
     }
 
     return () => {
-        if (recognitionRef.current) {
-            recognitionRef.current.stop();
-        }
-        if (synthRef.current) {
-            synthRef.current.cancel();
-        }
-        if (window.speechSynthesis) {
-             window.speechSynthesis.onvoiceschanged = null;
-        }
+        if (recognitionRef.current) recognitionRef.current.stop();
+        stopSpeaking();
+        if (audioContextRef.current) audioContextRef.current.close();
     }
   }, []);
 
@@ -168,47 +157,133 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
-  const speakText = (text: string) => {
-      if (!synthRef.current) return;
+  // --- AUDIO DECODING HELPERS ---
+  const base64ToArrayBuffer = (base64: string) => {
+    const binaryString = window.atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  };
 
-      synthRef.current.cancel();
+  const decodeAudioData = async (arrayBuffer: ArrayBuffer): Promise<AudioBuffer> => {
+      if (!audioContextRef.current) throw new Error("AudioContext not initialized");
+      
+      // Since it's raw PCM (int16), we need to manually decode it if standard decodeAudioData fails 
+      // or if the API returns raw bytes without header.
+      // The instructions imply raw PCM 24kHz.
+      
+      const dataView = new DataView(arrayBuffer);
+      const numChannels = 1;
+      const sampleRate = 24000;
+      const pcmData = new Int16Array(arrayBuffer);
+      const frameCount = pcmData.length;
+      
+      const audioBuffer = audioContextRef.current.createBuffer(numChannels, frameCount, sampleRate);
+      const channelData = audioBuffer.getChannelData(0);
+      
+      for (let i = 0; i < frameCount; i++) {
+          // Convert int16 to float32 (-1.0 to 1.0)
+          channelData[i] = pcmData[i] / 32768.0;
+      }
 
+      return audioBuffer;
+  };
+
+  const playPcmAudio = async (base64String: string) => {
+      if (!audioContextRef.current) return;
+      
+      // Resume context if suspended (browser policy)
+      if (audioContextRef.current.state === 'suspended') {
+          await audioContextRef.current.resume();
+      }
+
+      try {
+          const arrayBuffer = base64ToArrayBuffer(base64String);
+          const audioBuffer = await decodeAudioData(arrayBuffer);
+          
+          const source = audioContextRef.current.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContextRef.current.destination);
+          
+          source.onended = () => {
+              setIsSpeaking(false);
+              currentSourceRef.current = null;
+          };
+
+          currentSourceRef.current = source;
+          setIsSpeaking(true);
+          source.start();
+
+      } catch (e) {
+          console.error("Error playing PCM audio", e);
+          setIsSpeaking(false);
+      }
+  };
+
+  // --- MAIN SPEAK FUNCTION ---
+  const speakText = async (text: string) => {
+      stopSpeaking();
+
+      // Clean text
       const cleanText = text
         .replace(/[*#_`]/g, '')
         .replace(/\$/g, '') 
         .replace(/\[.*?\]/g, '')
         .replace(/\n/g, '. ');
 
-      const utterance = new SpeechSynthesisUtterance(cleanText);
+      // 1. CLOUD TTS
+      if (voiceSettings.type === 'cloud') {
+          setAudioLoading(true);
+          try {
+              const base64Audio = await generateSpeech(cleanText, voiceSettings.voiceURI);
+              await playPcmAudio(base64Audio);
+          } catch (e) {
+              console.error("Cloud TTS failed, falling back to system", e);
+              // Fallback to system if cloud fails
+              speakSystemText(cleanText);
+          } finally {
+              setAudioLoading(false);
+          }
+      } 
+      // 2. SYSTEM TTS
+      else {
+          speakSystemText(cleanText);
+      }
+  };
+
+  const speakSystemText = (text: string) => {
+      if (!synthRef.current) return;
+
+      const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = voiceSettings.rate;
-      utterance.pitch = 1.0;
-      // CRITICAL: Always set lang to uk-UA as a fallback
       utterance.lang = 'uk-UA';
 
-      // Find the selected voice object
       const voices = synthRef.current.getVoices();
       const selectedVoice = voices.find(v => v.voiceURI === voiceSettings.voiceURI);
-      
-      if (selectedVoice) {
-          utterance.voice = selectedVoice;
-      } 
-      // If no selectedVoice, the browser will try to use the system default for 'uk-UA'
+      if (selectedVoice) utterance.voice = selectedVoice;
 
       utterance.onstart = () => setIsSpeaking(true);
       utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = (e) => {
-          console.error("Speech synthesis error", e);
-          setIsSpeaking(false);
-      };
+      utterance.onerror = () => setIsSpeaking(false);
 
       synthRef.current.speak(utterance);
   };
 
   const stopSpeaking = () => {
+      // Stop System TTS
       if (synthRef.current) {
           synthRef.current.cancel();
-          setIsSpeaking(false);
       }
+      // Stop Cloud Audio
+      if (currentSourceRef.current) {
+          currentSourceRef.current.stop();
+          currentSourceRef.current = null;
+      }
+      setIsSpeaking(false);
+      setAudioLoading(false);
   };
 
   const handleSend = async () => {
@@ -240,7 +315,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       console.error("Chat error:", error);
       const errorText = "Вибач, сталася помилка при отриманні відповіді. Спробуй, будь ласка, ще раз.";
       setMessages(prev => [...prev, { role: 'model', text: errorText }]);
-      if (isSoundOn) speakText(errorText);
     } finally {
       setLoading(false);
     }
@@ -267,7 +341,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         alert("Ваш браузер не підтримує голосовий ввід.");
         return;
     }
-
     if (isListening) {
         recognitionRef.current.stop();
     } else {
@@ -305,25 +378,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
           </div>
         );
       }
-
-      return (
-        <p key={index} className="mb-1 leading-relaxed">
-           {parseInline(line)}
-        </p>
-      );
+      return <p key={index} className="mb-1 leading-relaxed">{parseInline(line)}</p>;
     });
   };
-
-  // Test current voice settings
-  const testVoice = () => {
-      stopSpeaking();
-      const utterance = new SpeechSynthesisUtterance("Це перевірка голосу. Успіхів у підготовці до НМТ!");
-      const voice = synthRef.current?.getVoices().find(v => v.voiceURI === voiceSettings.voiceURI);
-      if (voice) utterance.voice = voice;
-      utterance.lang = 'uk-UA'; // Ensure lang is set
-      utterance.rate = voiceSettings.rate;
-      synthRef.current?.speak(utterance);
-  }
 
   return (
     <div className="max-w-4xl mx-auto w-full h-[calc(100vh-8rem)] flex flex-col bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in duration-300 relative">
@@ -347,7 +404,10 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         
         <div className="flex items-center space-x-1">
             <button
-                onClick={() => setShowSettings(!showSettings)}
+                onClick={() => {
+                  setShowSettings(!showSettings);
+                  setShowVoiceHelp(false);
+                }}
                 className={`p-2 rounded-lg transition-colors ${showSettings ? 'bg-slate-100 text-blue-600' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-50'}`}
                 title="Налаштування голосу"
             >
@@ -365,79 +425,86 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                 className={`p-2 rounded-lg transition-colors ${isSpeaking ? 'text-red-500 hover:bg-red-50' : (isSoundOn ? 'text-blue-600 hover:bg-blue-50' : 'text-slate-400 hover:bg-slate-50')}`}
                 title={isSpeaking ? "Зупинити озвучення" : (isSoundOn ? "Вимкнути звук" : "Увімкнути звук")}
             >
-                {isSpeaking ? <StopCircle className="w-5 h-5 animate-pulse" /> : (isSoundOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />)}
+                {audioLoading ? <Loader2 className="w-5 h-5 animate-spin"/> : (isSpeaking ? <StopCircle className="w-5 h-5 animate-pulse" /> : (isSoundOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />))}
             </button>
-            <button 
-                onClick={handleClear}
-                className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                title="Очистити чат"
-            >
-                <Eraser className="w-5 h-5" />
-            </button>
+            <button onClick={handleClear} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Eraser className="w-5 h-5" /></button>
         </div>
 
         {/* Settings Popover */}
         {showSettings && (
-            <div className="absolute top-16 right-4 w-72 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 p-4 animate-in fade-in zoom-in-95 duration-200">
-                <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-bold text-slate-800 text-sm">Налаштування озвучки</h3>
-                    <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600">
-                        <X className="w-4 h-4" />
-                    </button>
-                </div>
+            <div className="absolute top-16 right-4 w-80 bg-white rounded-2xl shadow-xl border border-slate-200 z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                {!showVoiceHelp ? (
+                  <div className="p-4 space-y-4">
+                    <div className="flex justify-between items-center mb-1">
+                        <h3 className="font-bold text-slate-800 text-sm">Налаштування озвучки</h3>
+                        <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
+                    </div>
 
-                <div className="space-y-4">
                     <div>
                         <label className="block text-xs font-semibold text-slate-500 mb-1">Голос</label>
                         <select 
                             value={voiceSettings.voiceURI}
-                            onChange={(e) => setVoiceSettings(prev => ({ ...prev, voiceURI: e.target.value }))}
+                            onChange={(e) => {
+                                const isCloud = CLOUD_VOICES.some(v => v.id === e.target.value);
+                                setVoiceSettings(prev => ({ 
+                                    ...prev, 
+                                    voiceURI: e.target.value,
+                                    type: isCloud ? 'cloud' : 'system'
+                                }));
+                            }}
                             className="w-full text-sm p-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         >
-                            <option value="">Системний голос (Автоматично)</option>
-                            {availableVoices.map((voice) => (
-                                <option key={voice.voiceURI} value={voice.voiceURI}>
-                                    {voice.name}
-                                </option>
-                            ))}
+                            <optgroup label="AI Голоси (Висока якість, Інтернет)">
+                                {CLOUD_VOICES.map((v) => (
+                                    <option key={v.id} value={v.id}>✨ {v.name}</option>
+                                ))}
+                            </optgroup>
+                            <optgroup label="Системні голоси (Офлайн)">
+                                {availableSystemVoices.map((voice) => (
+                                    <option key={voice.voiceURI} value={voice.voiceURI}>{voice.name}</option>
+                                ))}
+                                {availableSystemVoices.length === 0 && <option value="" disabled>Голоси не знайдено</option>}
+                            </optgroup>
                         </select>
-                        {availableVoices.length === 0 && (
-                            <div className="flex items-start mt-2 p-2 bg-yellow-50 rounded text-[10px] text-yellow-700">
-                                <AlertTriangle className="w-3 h-3 mr-1 mt-0.5 flex-shrink-0" />
-                                <span>
-                                    Браузер не знайшов українських голосів. Спробуйте оновити сторінку або перевірте, чи встановлено мовний пакет "Українська" в налаштуваннях вашої системи.
-                                </span>
-                            </div>
-                        )}
+                        
+                        <button onClick={() => setShowVoiceHelp(true)} className="flex items-center mt-2 text-[11px] text-blue-600 hover:underline cursor-pointer">
+                          <HelpCircle className="w-3 h-3 mr-1" /> Як встановити системний голос?
+                        </button>
                     </div>
 
                     <div>
                         <div className="flex justify-between mb-1">
-                            <label className="text-xs font-semibold text-slate-500">Швидкість</label>
+                            <label className="text-xs font-semibold text-slate-500">Швидкість (лише системні)</label>
                             <span className="text-xs font-mono text-slate-700">{voiceSettings.rate}x</span>
                         </div>
                         <input 
-                            type="range" 
-                            min="0.5" 
-                            max="2" 
-                            step="0.1" 
+                            type="range" min="0.5" max="2" step="0.1" 
                             value={voiceSettings.rate}
+                            disabled={voiceSettings.type === 'cloud'}
                             onChange={(e) => setVoiceSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
-                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                            className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600 disabled:opacity-50"
                         />
-                         <div className="flex justify-between text-[10px] text-slate-400 mt-1">
-                            <span>Повільно</span>
-                            <span>Швидко</span>
-                        </div>
                     </div>
-
-                    <button 
-                        onClick={testVoice}
-                        className="w-full py-2 bg-blue-50 text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-100 transition-colors"
-                    >
-                        Тест голосу
-                    </button>
-                </div>
+                  </div>
+                ) : (
+                  <div className="p-0">
+                    <div className="p-3 border-b border-slate-100 flex items-center bg-slate-50">
+                       <button onClick={() => setShowVoiceHelp(false)} className="mr-2 p-1 hover:bg-slate-200 rounded-full"><ArrowLeft className="w-4 h-4 text-slate-600"/></button>
+                       <h3 className="font-bold text-slate-800 text-sm">Інструкція (Системні голоси)</h3>
+                    </div>
+                    <div className="p-4 space-y-4 max-h-96 overflow-y-auto text-xs text-slate-600">
+                       <p>Якщо ви обрали "AI Голос", встановлювати нічого не потрібно. Для системних голосів:</p>
+                       <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                          <div className="flex items-center font-bold text-slate-800 mb-1"><Monitor className="w-3 h-3 mr-1" /> Windows</div>
+                          <ol className="list-decimal list-inside space-y-1"><li>Налаштування → Час і мова → Голос.</li><li>Додати голос → <strong>Ukrainian</strong>.</li></ol>
+                       </div>
+                       <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+                          <div className="flex items-center font-bold text-slate-800 mb-1"><Smartphone className="w-3 h-3 mr-1" /> Android</div>
+                          <ol className="list-decimal list-inside space-y-1"><li>Налаштування → Система → Мова та ввід.</li><li>Синтез мови → Шестерня → Встановити голосові дані → <strong>Українська</strong>.</li></ol>
+                       </div>
+                    </div>
+                  </div>
+                )}
             </div>
         )}
       </div>
@@ -445,30 +512,14 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       {/* Messages Area */}
       <div className="flex-grow overflow-y-auto p-4 sm:p-6 space-y-6 bg-slate-50/50">
         {messages.map((msg, idx) => (
-          <div 
-            key={idx} 
-            className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
-          >
-             {/* Avatar */}
-             <div className={`
-                w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm
-                ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-purple-600 text-white'}
-             `}>
+          <div key={idx} className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+             <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-purple-600 text-white'}`}>
                 {msg.role === 'user' ? <User className="w-5 h-5" /> : <Bot className="w-5 h-5" />}
              </div>
-
-             {/* Bubble */}
              <div className="flex flex-col items-start max-w-[85%] sm:max-w-[75%]">
-                 <div className={`
-                    px-5 py-3.5 rounded-2xl shadow-sm text-sm sm:text-base w-full
-                    ${msg.role === 'user' 
-                        ? 'bg-blue-600 text-white rounded-tr-none' 
-                        : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none'}
-                 `}>
+                 <div className={`px-5 py-3.5 rounded-2xl shadow-sm text-sm sm:text-base w-full ${msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none'}`}>
                     {renderMessageContent(msg.text)}
                  </div>
-                 
-                 {/* Replay Button for AI messages */}
                  {msg.role === 'model' && (
                      <button 
                         onClick={() => speakText(msg.text)}
@@ -481,15 +532,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
              </div>
           </div>
         ))}
-        
-        {loading && (
+        {(loading || audioLoading) && (
              <div className="flex items-start gap-3">
-                 <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center flex-shrink-0">
-                    <Bot className="w-5 h-5" />
-                 </div>
+                 <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center flex-shrink-0"><Bot className="w-5 h-5" /></div>
                  <div className="bg-white border border-slate-200 px-4 py-3 rounded-2xl rounded-tl-none shadow-sm flex items-center space-x-2">
                     <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
-                    <span className="text-sm text-slate-500 font-medium">Думаю над відповіддю...</span>
+                    <span className="text-sm text-slate-500 font-medium">{audioLoading ? 'Завантажую озвучку...' : 'Думаю над відповіддю...'}</span>
                  </div>
              </div>
         )}
@@ -501,23 +549,16 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
          <div className="flex items-end gap-2 max-w-4xl mx-auto relative">
              <button
                 onClick={toggleListening}
-                className={`
-                    flex-shrink-0 p-3 rounded-xl transition-all duration-300 mb-[2px]
-                    ${isListening 
-                        ? 'bg-red-50 text-red-600 animate-pulse ring-2 ring-red-200' 
-                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700'}
-                `}
-                title={isListening ? "Зупинити запис" : "Голосовий ввід"}
+                className={`flex-shrink-0 p-3 rounded-xl transition-all duration-300 mb-[2px] ${isListening ? 'bg-red-50 text-red-600 animate-pulse ring-2 ring-red-200' : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700'}`}
              >
                 {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
              </button>
-
              <textarea
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder={isListening ? "Слухаю..." : "Наприклад: Коли почалася Друга світова війна?"}
-                className="w-full bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-2xl px-4 py-3 pr-12 resize-none text-slate-800 placeholder:text-slate-400 transition-all max-h-32 min-h-[52px]"
+                className="w-full bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-2xl px-4 py-3 pr-12 resize-none text-slate-800 placeholder:text-slate-400 transition-all min-h-[52px]"
                 rows={1}
                 style={{ height: 'auto', minHeight: '52px' }}
                 onInput={(e) => {
@@ -526,17 +567,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                     target.style.height = `${Math.min(target.scrollHeight, 128)}px`;
                 }}
              />
-             <button
-                onClick={handleSend}
-                disabled={!inputValue.trim() || loading}
-                className="absolute right-2 bottom-2 p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600 transition-colors shadow-sm"
-             >
-                <Send className="w-5 h-5" />
-             </button>
+             <button onClick={handleSend} disabled={!inputValue.trim() || loading} className="absolute right-2 bottom-2 p-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-colors shadow-sm"><Send className="w-5 h-5" /></button>
          </div>
-         <p className="text-xs text-center text-slate-400 mt-2">
-             ШІ може робити помилки. Перевіряйте важливу інформацію.
-         </p>
+         <p className="text-xs text-center text-slate-400 mt-2">ШІ може робити помилки. Перевіряйте важливу інформацію.</p>
       </div>
     </div>
   );
