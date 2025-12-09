@@ -200,8 +200,8 @@ export const createNMTChat = (): Chat => {
 };
 
 export const generateSpeech = async (text: string, voiceName: string): Promise<string> => {
-  // Truncate text if it's too long to prevent timeout/errors (optional safety)
-  const safeText = text.slice(0, 1500); 
+  // Truncate text to a larger safe limit for study notes (Gemini usually supports ~4000 chars context for TTS)
+  const safeText = text.slice(0, 4000); 
 
   try {
     const response = await ai.models.generateContent({

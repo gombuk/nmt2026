@@ -171,10 +171,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const decodeAudioData = async (arrayBuffer: ArrayBuffer): Promise<AudioBuffer> => {
       if (!audioContextRef.current) throw new Error("AudioContext not initialized");
       
-      // Since it's raw PCM (int16), we need to manually decode it if standard decodeAudioData fails 
-      // or if the API returns raw bytes without header.
-      // The instructions imply raw PCM 24kHz.
-      
       const dataView = new DataView(arrayBuffer);
       const numChannels = 1;
       const sampleRate = 24000;
@@ -185,7 +181,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       const channelData = audioBuffer.getChannelData(0);
       
       for (let i = 0; i < frameCount; i++) {
-          // Convert int16 to float32 (-1.0 to 1.0)
           channelData[i] = pcmData[i] / 32768.0;
       }
 
@@ -227,9 +222,11 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   const speakText = async (text: string) => {
       stopSpeaking();
 
-      // Clean text
+      // Robust Markdown Cleaning for Speech
       const cleanText = text
-        .replace(/[*#_`]/g, '')
+        .replace(/^#+\s*/gm, '') // Headers
+        .replace(/[\*_]{1,3}(.*?)[\*_]{1,3}/g, '$1') // Bold/Italic
+        .replace(/[*#_`]/g, '') // Remaining
         .replace(/\$/g, '') 
         .replace(/\[.*?\]/g, '')
         .replace(/\n/g, '. ');
