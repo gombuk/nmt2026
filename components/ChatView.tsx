@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createNMTChat } from '../services/geminiService';
 import { Chat } from "@google/genai";
-import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser } from 'lucide-react';
+import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff } from 'lucide-react';
 
 interface ChatViewProps {
   onBack: () => void;
@@ -21,14 +21,49 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   
   // Use a ref to persist the chat session across renders
   const chatSessionRef = useRef<Chat | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     // Initialize chat session on mount
     chatSessionRef.current = createNMTChat();
+    
+    // Check for browser support
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = false;
+        recognitionRef.current.lang = 'uk-UA';
+
+        recognitionRef.current.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript;
+            setInputValue((prev) => {
+                const newValue = prev ? `${prev} ${transcript}` : transcript;
+                return newValue;
+            });
+            setIsListening(false);
+        };
+
+        recognitionRef.current.onerror = (event: any) => {
+            console.error("Speech recognition error", event.error);
+            setIsListening(false);
+        };
+
+        recognitionRef.current.onend = () => {
+            setIsListening(false);
+        };
+    }
+
+    return () => {
+        if (recognitionRef.current) {
+            recognitionRef.current.stop();
+        }
+    }
   }, []);
 
   useEffect(() => {
@@ -82,6 +117,20 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       role: 'model', 
       text: 'Чат очищено. Я готовий до нових запитань про НМТ!' 
     }]);
+  };
+
+  const toggleListening = () => {
+    if (!recognitionRef.current) {
+        alert("Ваш браузер не підтримує голосовий ввід.");
+        return;
+    }
+
+    if (isListening) {
+        recognitionRef.current.stop();
+    } else {
+        recognitionRef.current.start();
+        setIsListening(true);
+    }
   };
 
   // Simple Markdown renderer with support for bold (**text**) and basic LaTeX cleanup ($text$)
@@ -205,11 +254,24 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       {/* Input Area */}
       <div className="p-4 bg-white border-t border-slate-100 shrink-0">
          <div className="flex items-end gap-2 max-w-4xl mx-auto relative">
+             <button
+                onClick={toggleListening}
+                className={`
+                    flex-shrink-0 p-3 rounded-xl transition-all duration-300 mb-[2px]
+                    ${isListening 
+                        ? 'bg-red-50 text-red-600 animate-pulse ring-2 ring-red-200' 
+                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700'}
+                `}
+                title={isListening ? "Зупинити запис" : "Голосовий ввід"}
+             >
+                {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+             </button>
+
              <textarea
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Наприклад: Коли почалася Друга світова війна?"
+                placeholder={isListening ? "Слухаю..." : "Наприклад: Коли почалася Друга світова війна?"}
                 className="w-full bg-slate-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-200 rounded-2xl px-4 py-3 pr-12 resize-none text-slate-800 placeholder:text-slate-400 transition-all max-h-32 min-h-[52px]"
                 rows={1}
                 style={{ height: 'auto', minHeight: '52px' }}
