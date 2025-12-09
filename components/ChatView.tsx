@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createNMTChat } from '../services/geminiService';
 import { Chat } from "@google/genai";
-import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X } from 'lucide-react';
+import { Send, ArrowLeft, Bot, User, Sparkles, Loader2, Eraser, Mic, MicOff, Volume2, VolumeX, StopCircle, Settings, X, AlertTriangle } from 'lucide-react';
 
 interface ChatViewProps {
   onBack: () => void;
@@ -65,9 +65,14 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         
         const loadVoices = () => {
              const voices = window.speechSynthesis.getVoices();
+             
+             if (voices.length === 0) return; // Wait for voices to load
+
              // Filter for Ukrainian voices
-             // We also look for generic voices if strictly UK is missing, but primarily UK
-             const ukVoices = voices.filter(v => v.lang.toLowerCase().includes('uk') || v.lang.toLowerCase().includes('ua'));
+             const ukVoices = voices.filter(v => 
+                v.lang.toLowerCase().includes('uk') || 
+                v.lang.toLowerCase().includes('ua')
+             );
              
              // Sort to prioritize Google/Premium voices which sound more human
              ukVoices.sort((a, b) => {
@@ -82,7 +87,10 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
 
              // Set default voice if none selected or selected is invalid
              setVoiceSettings(prev => {
+                 // Check if the currently selected voice still exists
                  const isValid = ukVoices.find(v => v.voiceURI === prev.voiceURI);
+                 
+                 // If not valid or empty, pick the first one, or leave empty (system default)
                  if (!prev.voiceURI || !isValid) {
                      return { ...prev, voiceURI: ukVoices[0]?.voiceURI || '' };
                  }
@@ -90,12 +98,25 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
              });
         };
 
+        // Try loading immediately
         loadVoices();
         
-        // Chrome loads voices asynchronously
-        if (window.speechSynthesis.onvoiceschanged !== undefined) {
-             window.speechSynthesis.onvoiceschanged = loadVoices;
-        }
+        // Setup listener for async loading (Chrome/Android)
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+
+        // Force a periodic check for the first few seconds (failsafe for some browsers)
+        const intervalId = setInterval(() => {
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length > 0) {
+                loadVoices();
+                // If we found voices, we can stop polling, BUT we keep polling if we specifically haven't found UK voices yet
+                // to be safe, we just clear it after we get *any* voices to save resources
+                clearInterval(intervalId);
+            }
+        }, 500);
+
+        // Cleanup after 5 seconds to stop polling anyway
+        setTimeout(() => clearInterval(intervalId), 5000);
     }
 
     // Check for Speech Recognition support
@@ -132,6 +153,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
         if (synthRef.current) {
             synthRef.current.cancel();
         }
+        if (window.speechSynthesis) {
+             window.speechSynthesis.onvoiceschanged = null;
+        }
     }
   }, []);
 
@@ -158,6 +182,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.rate = voiceSettings.rate;
       utterance.pitch = 1.0;
+      // CRITICAL: Always set lang to uk-UA as a fallback
+      utterance.lang = 'uk-UA';
 
       // Find the selected voice object
       const voices = synthRef.current.getVoices();
@@ -165,14 +191,15 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       
       if (selectedVoice) {
           utterance.voice = selectedVoice;
-      } else {
-          // Fallback if specific voice not found (e.g. browser update)
-          utterance.lang = 'uk-UA';
-      }
+      } 
+      // If no selectedVoice, the browser will try to use the system default for 'uk-UA'
 
       utterance.onstart = () => setIsSpeaking(true);
       utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
+      utterance.onerror = (e) => {
+          console.error("Speech synthesis error", e);
+          setIsSpeaking(false);
+      };
 
       synthRef.current.speak(utterance);
   };
@@ -293,6 +320,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       const utterance = new SpeechSynthesisUtterance("Це перевірка голосу. Успіхів у підготовці до НМТ!");
       const voice = synthRef.current?.getVoices().find(v => v.voiceURI === voiceSettings.voiceURI);
       if (voice) utterance.voice = voice;
+      utterance.lang = 'uk-UA'; // Ensure lang is set
       utterance.rate = voiceSettings.rate;
       synthRef.current?.speak(utterance);
   }
@@ -366,7 +394,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                             onChange={(e) => setVoiceSettings(prev => ({ ...prev, voiceURI: e.target.value }))}
                             className="w-full text-sm p-2 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         >
-                            {availableVoices.length === 0 && <option value="">Голоси не знайдені</option>}
+                            <option value="">Системний голос (Автоматично)</option>
                             {availableVoices.map((voice) => (
                                 <option key={voice.voiceURI} value={voice.voiceURI}>
                                     {voice.name}
@@ -374,7 +402,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
                             ))}
                         </select>
                         {availableVoices.length === 0 && (
-                            <p className="text-[10px] text-red-500 mt-1">Перевірте, чи встановлені українські мовні пакети в системі.</p>
+                            <div className="flex items-start mt-2 p-2 bg-yellow-50 rounded text-[10px] text-yellow-700">
+                                <AlertTriangle className="w-3 h-3 mr-1 mt-0.5 flex-shrink-0" />
+                                <span>
+                                    Браузер не знайшов українських голосів. Спробуйте оновити сторінку або перевірте, чи встановлено мовний пакет "Українська" в налаштуваннях вашої системи.
+                                </span>
+                            </div>
                         )}
                     </div>
 
@@ -400,8 +433,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
 
                     <button 
                         onClick={testVoice}
-                        disabled={availableVoices.length === 0}
-                        className="w-full py-2 bg-blue-50 text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-100 transition-colors disabled:opacity-50"
+                        className="w-full py-2 bg-blue-50 text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-100 transition-colors"
                     >
                         Тест голосу
                     </button>
