@@ -84,7 +84,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
     }]);
   };
 
-  // Simple Markdown renderer (similar to StudyView but simplified for chat bubbles)
+  // Simple Markdown renderer with support for bold (**text**) and basic LaTeX cleanup ($text$)
   const renderMessageContent = (text: string) => {
     return text.split('\n').map((line, index, array) => {
       // Empty lines
@@ -97,32 +97,37 @@ export const ChatView: React.FC<ChatViewProps> = ({ onBack }) => {
       if (line.startsWith('### ')) return <h4 key={index} className="font-bold text-base mt-2 mb-1">{line.replace('### ', '')}</h4>;
       if (line.startsWith('## ')) return <h3 key={index} className="font-bold text-lg mt-3 mb-2">{line.replace('## ', '')}</h3>;
       
+      // Helper for inline styles
+      const parseInline = (content: string) => {
+        // Split by bold (**...**) AND LaTeX math ($...$)
+        const parts = content.split(/(\*\*.*?\*\*|\$.*?\$)/g);
+        return parts.map((part, i) => {
+             if (part.startsWith('**') && part.endsWith('**')) {
+                 return <strong key={i}>{part.slice(2, -2)}</strong>;
+             }
+             if (part.startsWith('$') && part.endsWith('$')) {
+                 // Render math-like text cleanly without dollar signs
+                 return <span key={i} className="font-mono text-purple-700 bg-purple-50 px-1 rounded mx-0.5">{part.slice(1, -1)}</span>;
+             }
+             return part;
+        });
+      };
+
       // Bullet points
       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
-        const parts = line.replace(/^[-*]\s+/, '').split(/(\*\*.*?\*\*)/g);
+        const content = line.replace(/^[-*]\s+/, '');
         return (
           <div key={index} className="flex items-start ml-2 mb-1">
              <div className="w-1.5 h-1.5 rounded-full bg-current mt-2 mr-2 flex-shrink-0 opacity-70"></div>
-             <span>
-               {parts.map((part, i) => 
-                  part.startsWith('**') && part.endsWith('**') 
-                    ? <strong key={i}>{part.slice(2, -2)}</strong> 
-                    : part
-               )}
-             </span>
+             <span>{parseInline(content)}</span>
           </div>
         );
       }
 
-      // Regular paragraphs with bold support
-      const parts = line.split(/(\*\*.*?\*\*)/g);
+      // Regular paragraphs
       return (
         <p key={index} className="mb-1 leading-relaxed">
-           {parts.map((part, i) => 
-              part.startsWith('**') && part.endsWith('**') 
-                ? <strong key={i}>{part.slice(2, -2)}</strong> 
-                : part
-           )}
+           {parseInline(line)}
         </p>
       );
     });

@@ -44,18 +44,27 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
       if (line.startsWith('## ')) return <h2 key={index} className="text-xl font-bold text-blue-700 mt-6 mb-3 border-b pb-1">{line.replace('## ', '')}</h2>;
       if (line.startsWith('# ')) return <h1 key={index} className="text-2xl font-bold text-slate-900 mt-8 mb-4">{line.replace('# ', '')}</h1>;
       
-      // Bold text handling within lines
-      const parts = line.split(/(\*\*.*?\*\*)/g);
+      const parseInline = (content: string) => {
+        // Split by bold (**...**) AND LaTeX math ($...$)
+        const parts = content.split(/(\*\*.*?\*\*|\$.*?\$)/g);
+        return parts.map((part, i) => {
+             if (part.startsWith('**') && part.endsWith('**')) {
+                 return <strong key={i} className="text-slate-900">{part.slice(2, -2)}</strong>;
+             }
+             if (part.startsWith('$') && part.endsWith('$')) {
+                 // Render math-like text cleanly without dollar signs
+                 return <span key={i} className="font-mono text-blue-700 bg-blue-50 px-1 rounded mx-0.5">{part.slice(1, -1)}</span>;
+             }
+             return part;
+        });
+      };
       
       // Bullet points
       if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+        const content = line.replace(/^[-*]\s+/, '');
         return (
           <li key={index} className="ml-5 mb-1 text-slate-700 list-disc">
-             {parts.map((part, i) => 
-                part.startsWith('**') && part.endsWith('**') 
-                  ? <strong key={i}>{part.slice(2, -2)}</strong> 
-                  : part
-             )}
+             {parseInline(content)}
           </li>
         );
       }
@@ -64,11 +73,7 @@ export const StudyView: React.FC<StudyViewProps> = ({ onBack, onStartQuiz }) => 
       if (line.trim().length > 0) {
         return (
             <p key={index} className="mb-2 text-slate-700 leading-relaxed">
-                {parts.map((part, i) => 
-                part.startsWith('**') && part.endsWith('**') 
-                  ? <strong key={i} className="text-slate-900">{part.slice(2, -2)}</strong> 
-                  : part
-             )}
+                {parseInline(line)}
             </p>
         );
       }
