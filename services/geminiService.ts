@@ -6,6 +6,18 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const modelId = "gemini-2.5-flash";
 
+// Helper to clean JSON response from Markdown code blocks
+function cleanAndParseJSON(text: string): any {
+  try {
+    // Remove ```json and ``` wrapping if present
+    const cleaned = text.replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("JSON Parse Error. Raw text:", text);
+    throw new Error("Failed to parse API response");
+  }
+}
+
 async function fetchQuestionsInternal(subject: string, count: number, topic?: string): Promise<Question[]> {
   const topicContext = topic 
     ? `Питання мають стосуватися ВИКЛЮЧНО теми: "${topic}".` 
@@ -24,9 +36,9 @@ async function fetchQuestionsInternal(subject: string, count: number, topic?: st
     4. Надай пояснення до правильної відповіді.
     5. Для математики включи завдання на обчислення (подані як тести).
     ${topic ? `6. Оскільки тема вузька ("${topic}"), намагайся зробити питання різноманітними, охоплюючи різні аспекти цієї теми.` : ''}
-    7. ВАЖЛИВО: Не використовуй LaTeX форматування (знаки $). Пиши формули звичайним текстом (наприклад, x^2, 1/2, корінь з 5).
+    7. ВАЖЛИВО: Не використовуй LaTeX форматування (знаки $). Пиши формули звичайним текстом (наприклад, x^2, 1/2, корінь з 5, pi).
     
-    Поверни відповідь виключно у форматі JSON.
+    Поверни відповідь виключно у форматі JSON без зайвого тексту.
   `;
 
   try {
@@ -57,7 +69,14 @@ async function fetchQuestionsInternal(subject: string, count: number, topic?: st
     });
 
     if (response.text) {
-        const rawQuestions = JSON.parse(response.text) as Question[];
+        // Use robust cleaner
+        const rawQuestions = cleanAndParseJSON(response.text) as Question[];
+        
+        // Ensure it's an array
+        if (!Array.isArray(rawQuestions)) {
+            throw new Error("API response is not an array");
+        }
+
         // Tag questions with subject
         return rawQuestions.map(q => ({ ...q, subject }));
     }
@@ -144,21 +163,40 @@ export const generateTopicQuiz = async (subject: Subject, topic: string): Promis
 };
 
 export const generateStudyNotes = async (subject: string, topic: string): Promise<string> => {
+    // Dynamic prompt structure based on subject
+    const isMath = subject === Subject.MATH || subject.includes('Математика') || subject.includes('Алгебра') || subject.includes('Геометрія');
+    
+    let structureRequirements = "";
+    if (isMath) {
+        structureRequirements = `
+          1. **Вступ**: короткий опис, що це за тема і де вона застосовується.
+          2. **Основні формули та визначення**: випиши головні формули, теореми чи аксіоми.
+          3. **Алгоритми розв'язання**: покрокові інструкції для типових задач цієї теми.
+          4. **Типові помилки**: що учні часто плутають.
+          5. **Лайфхаки для НМТ**: як швидко розв'язувати такі завдання.
+        `;
+    } else {
+        structureRequirements = `
+          1. **Вступ**: короткий опис суті теми.
+          2. **Ключові дати та події** (для історії) або **Правила** (для мови).
+          3. **Персоналії** (для історії/літератури) або **Приклади** (для інших).
+          4. **Основний виклад матеріалу**: тезисно, головні події, причини та наслідки.
+          5. **Лайфхаки для НМТ**: на що звернути особливу увагу в тестах.
+        `;
+    }
+
     const prompt = `
       Створи детальний та структурований конспект для підготовки до НМТ 2026 з предмету "${subject}" на тему: "${topic}".
       
-      Вимоги до структури та оформлення (використовуй Markdown):
-      1. **Вступ**: короткий опис суті теми.
-      2. **Ключові дати та події** (для історії) або **Формули та визначення** (для інших предметів).
-      3. **Персоналії** (для історії/літератури).
-      4. **Основний виклад матеріалу**: тезисно, головні події, причини та наслідки.
-      5. **Лайфхаки для НМТ**: на що звернути особливу увагу в тестах.
+      Вимоги до структури (використовуй Markdown):
+      ${structureRequirements}
 
       ВАЖЛИВО: 
-      - Обов'язково виділяй жирним шрифтом (**приклад**) усі дати, імена, терміни.
-      - НЕ ВИКОРИСТОВУЙ LaTeX (знаки $). Пиши формули звичайним текстом або Unicode (наприклад: α, β, x^2, √25, 360°).
+      - Обов'язково виділяй жирним шрифтом (**приклад**) ключові поняття.
+      - НЕ ВИКОРИСТОВУЙ LaTeX (знаки $). Пиши формули звичайним текстом або Unicode (наприклад: α, β, x^2, √25, 360°, pi).
+      - Роби відступи між блоками для кращої читабельності.
       
-      Стиль викладу: чіткий, без зайвих слів, орієнтований на складання іспиту.
+      Стиль викладу: чіткий, навчальний, без зайвої "води".
       Мова: українська.
     `;
   
